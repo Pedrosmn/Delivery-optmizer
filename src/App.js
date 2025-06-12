@@ -1,6 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { MapContainer, TileLayer, Polyline, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
+import L from 'leaflet';
+
+import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+
+
 
 import { Card, CardContent } from './components/ui/card';
 import { Button } from './components/ui/button';
@@ -11,6 +18,13 @@ import { Hub } from './Hub.js';
 import { Rota } from './Rota.js';
 import { Grafo } from './Grafo.js';
 const API_BASE_URL = "http://127.0.0.1:8000";
+
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: markerIcon2x,
+  iconUrl: markerIcon,
+  shadowUrl: markerShadow,
+});
+
 
 
 const loadDataFromCSV = (csvText) => {
@@ -163,14 +177,10 @@ const initialData = {
   ],
 };
 
-const getNodeById = (id, grafo) => {
-  const vertice = grafo.vertices.get(id);
-  const coords = {
-    'D1': { lat: -9.6691, lng: -35.7153 },
-    'H1': { lat: -9.6550, lng: -35.7250 },
-    'Z1': { lat: -9.6450, lng: -35.7050 },
-  }[id] || { lat: 0, lng: 0 };
-  return { ...vertice, ...coords };
+const COORDS = {
+  0: { lat: -9.6691, lng: -35.7153 }, // Depósito Principal
+  1: { lat: -9.6550, lng: -35.7250 }, // Hub Central
+  2: { lat: -9.6450, lng: -35.7050 }, // Zona de Entrega 1
 };
 
 export default function App() {
@@ -377,35 +387,25 @@ const fetchCurrentState = async () => {
 
   const polylineData = useMemo(() => {
     const data = [];
-    
-    if (!grafo || !grafo.adjacencia || typeof grafo.adjacencia.forEach !== 'function') {
-      return data;
-    }
-    
-    grafo.adjacencia.forEach((rotas, origemId) => {
-      // Verificação adicional
-      if (!Array.isArray(rotas)) return;
-      
-      rotas.forEach(rota => {
-        // Verificação profunda
-        if (!rota || !rota.origem || !rota.destino) return;
-        
-        const fromNode = getNodeById(rota.origem.id, grafo);
-        const toNode = getNodeById(rota.destino.id, grafo);
-        
+    grafo.adjacencia.forEach((rotas) => {
+      rotas.forEach((rota) => {
+        const fromNode = COORDS[rota.origem.id];
+        const toNode = COORDS[rota.destino.id];
         if (fromNode && toNode) {
           const key = `${rota.origem.id}-${rota.destino.id}`;
           const isBlocked = blocked.includes(key);
           const color = isBlocked ? 'red' : rota.capacidade > 10 ? 'orange' : 'green';
-          
+          const weight = Math.min(rota.capacidade * 2, 15);
           data.push({
-            positions: [[fromNode.lat, fromNode.lng], [toNode.lat, toNode.lng]],
-            pathOptions: { color, weight: Math.min(rota.capacidade * 2, 15) }
+            positions: [
+              [fromNode.lat, fromNode.lng],
+              [toNode.lat, toNode.lng]
+            ],
+            pathOptions: { color, weight }
           });
         }
       });
     });
-    
     return data;
   }, [grafo, blocked]);
 
@@ -551,7 +551,7 @@ const fetchCurrentState = async () => {
           <h2 className="text-xl font-bold mb-2">Rede de Entregas</h2>
           <MapContainer
             center={[-9.6567, -35.7150]} // Centro aproximado dos pontos
-            zoom={11}
+            zoom={14}
             scrollWheelZoom={false}
             style={{ height: '500px', width: '100%' }}
           >
@@ -560,15 +560,15 @@ const fetchCurrentState = async () => {
               attribution="© OpenStreetMap contributors"
             />
             {Array.from(grafo.vertices.values()).map((node) => (
-              <Marker key={node.id} position={[getNodeById(node.id, grafo).lat, getNodeById(node.id, grafo).lng]}>
+              <Marker key={node.id} position={[COORDS[node.id].lat, COORDS[node.id].lng]}>
                 <Popup>
                   <strong>{node.nome}</strong>
                 </Popup>
               </Marker>
             ))}
             {polylineData.map((data, idx) => (
-              <Polyline key={idx} positions={data.positions} pathOptions={data.pathOptions} />
-            ))}
+  <Polyline key={idx} positions={data.positions} pathOptions={data.pathOptions} />
+))}
           </MapContainer>
         </CardContent>
       </Card>

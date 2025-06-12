@@ -803,9 +803,6 @@ const fetchCurrentState = async () => {
               ))
             )}
           <div className="mt-4">
-            <Button onClick={runStressTest} disabled={loading} className="mr-2 mb-2">
-              Teste de Stress
-            </Button>
           </div>
         </CardContent>
       </Card>

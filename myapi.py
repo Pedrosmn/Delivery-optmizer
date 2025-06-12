@@ -129,8 +129,8 @@ class NetworkAnalysisResponse(BaseModel):
     timestamp: str
 
 class RouteOperationRequest(BaseModel):
-    origem_id: str
-    destino_id: str
+    origem_id: int
+    destino_id: int
     capacidade: int
 
 
@@ -159,6 +159,14 @@ arestas = [
     Aresta(aresta_id=4, origem_id=5, destino_id=3, capacidade=80, uso=0, priority=Priority.MEDIUM),
 ]
 '''
+
+
+vertices: List[Vertice] = [
+    Vertice(vertice_id=0, name="Depósito Principal", type="storage"),
+    Vertice(vertice_id=1, name="Hub Central", type="hub"),
+    Vertice(vertice_id=2, name="Zona de Entrega 1", type="delivery_zone")
+]
+arestas: List[Aresta] = []
 #CRUD dos Vertices
 
 @api.get("/vertices/{vertice_id}", response_model=Vertice)
@@ -447,21 +455,24 @@ def calculate_max_flow(num_nodes, edges, sources, sinks):
 
 @api.get("/network/current-state", response_model=CurrentStateResponse)
 def get_current_state():
-    """Endpoint para fornecer o estado inicial vazio da rede"""
+    """Endpoint para fornecer o estado atual da rede"""
+    # Use os dados globais atuais
     response = {
-        "vertices": [
-            Vertice(vertice_id=0, name="Depósito Principal", type="storage"),
-            Vertice(vertice_id=1, name="Hub Central", type="hub"),
-            Vertice(vertice_id=2, name="Zona de Entrega 1", type="delivery_zone")
-        ],
-        "arestas": [],  # Lista vazia de rotas
+        "vertices": vertices,
+        "arestas": arestas,
         "grafo": {
             "vertices": [
-                {"id": 0, "nome": "Depósito Principal", "tipo": "storage"},
-                {"id": 1, "nome": "Hub Central", "tipo": "hub"},
-                {"id": 2, "nome": "Zona de Entrega 1", "tipo": "delivery_zone"}
+                {"id": v.vertice_id, "nome": v.name, "tipo": v.type}
+                for v in vertices
             ],
-            "rotas": []  # Rotas vazias
+            "rotas": [
+                {
+                    "origem": a.origem_id,
+                    "destino": a.destino_id,
+                    "capacidade": a.capacidade
+                }
+                for a in arestas
+            ]
         }
     }
     return response

@@ -174,23 +174,7 @@ const getNodeById = (id, grafo) => {
 };
 
 export default function App() {
-  const [grafo, setGrafo] = useState(() => {
-    const g = new Grafo();
-    
-    // Vértices iniciais (opcional - pode começar totalmente vazio)
-    const deposito = new Deposito("D1", "Depósito Principal");
-    const hub = new Hub("H1", "Hub Central");
-    const zona = new ZonaEntrega("Z1", "Zona de Entrega 1");
-    
-    g.adicionarVertice(deposito);
-    g.adicionarVertice(hub);
-    g.adicionarVertice(zona);
-    
-    // Adjacência vazia
-    g.adjacencia = new Map();
-    
-    return g;
-  });
+  const [grafo, setGrafo] = useState(new Grafo());
   const [blocked, setBlocked] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -314,20 +298,64 @@ export default function App() {
     }
   };
 
+const fetchCurrentState = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/network/current-state`);
+    const data = await response.json();
+    const g = new Grafo();
+    const verticesMap = new Map();
+
+    // Adiciona vértices
+    (data.grafo.vertices || []).forEach(v => {
+      let vertice;
+      switch (v.tipo) {
+        case 'storage': vertice = new Deposito(v.id, v.nome); break;
+        case 'hub': vertice = new Hub(v.id, v.nome); break;
+        case 'delivery_zone': vertice = new ZonaEntrega(v.id, v.nome); break;
+        default: vertice = new Vertice(v.id, v.nome);
+      }
+      verticesMap.set(v.id, vertice);
+      g.adicionarVertice(vertice);
+    });
+
+    // Adiciona rotas (corrigido para .rotas)
+    (data.grafo.rotas || []).forEach(r => {
+      const origem = verticesMap.get(r.origem);
+      const destino = verticesMap.get(r.destino);
+      if (origem && destino) {
+        g.adicionarRota(new Rota(origem, destino, r.capacidade));
+      }
+    });
+
+    setGrafo(g);
+  } catch (err) {
+    setError('Erro ao atualizar estado da rede.');
+  }
+};
+
   const addNewRoute = async () => {
-    if (loading || !newRoute.from || !newRoute.to || newRoute.capacity <= 0) return;
+    if (
+      loading ||
+      newRoute.from === '' ||
+      newRoute.to === '' ||
+      isNaN(newRoute.from) ||
+      isNaN(newRoute.to) ||
+      newRoute.capacity <= 0
+    ) {
+      console.log('Botão não faz nada: campos obrigatórios não preenchidos');
+      return;
+    }
     setLoading(true);
     try {
+      console.log('Enviando rota:', newRoute);
       const response = await fetch(`${API_BASE_URL}/network/add-route`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          origem_id: newRoute.from,
-          destino_id: newRoute.to,
-          capacidade: newRoute.capacity
-        })
+          origem_id: parseInt(newRoute.from, 10),
+          destino_id: parseInt(newRoute.to, 10),
+          capacidade: newRoute.capacity,
+        }),
       });
 
       if (!response.ok) {
@@ -336,33 +364,12 @@ export default function App() {
       }
 
       const data = await response.json();
-      
-      // Atualização CORRETA do estado
-      setGrafo(prevGrafo => {
-        const newGrafo = new Grafo();
-        newGrafo.vertices = new Map(prevGrafo.vertices);
-        newGrafo.adjacencia = new Map(prevGrafo.adjacencia);
-        
-        const origem = prevGrafo.vertices.get(newRoute.from);
-        const destino = prevGrafo.vertices.get(newRoute.to);
-        
-        if (origem && destino) {
-          const novaRota = new Rota(origem, destino, newRoute.capacity);
-          
-          if (!newGrafo.adjacencia.has(origem.id)) {
-            newGrafo.adjacencia.set(origem.id, []);
-          }
-          
-          newGrafo.adjacencia.get(origem.id).push(novaRota);
-        }
-        
-        return newGrafo;
-      });
-      
-      setNewRoute({ from: '', to: '', capacity: 0 });
+      if (data.success) {
+        await fetchCurrentState(); // Atualize o grafo após adicionar rota
+        setNewRoute({ from: '', to: '', capacity: 0 });
+      }
     } catch (err) {
-      setError(err.message || 'Erro ao adicionar nova rota. Tente novamente.');
-      console.error('Erro detalhado:', err);
+      setError('Erro ao adicionar nova rota.');
     } finally {
       setLoading(false);
     }
@@ -436,22 +443,8 @@ export default function App() {
       const data = await response.json();
       
       if (data.success) {
-        // Criar um novo grafo vazio mas corretamente inicializado
-        const newGrafo = new Grafo();
-        newGrafo.vertices = new Map();
-        newGrafo.adjacencia = new Map();
-        
-        // Adicionar vértices básicos (opcional)
-        const deposito = new Deposito("D1", "Depósito Principal");
-        const hub = new Hub("H1", "Hub Central");
-        const zona = new ZonaEntrega("Z1", "Zona de Entrega 1");
-        
-        newGrafo.adicionarVertice(deposito);
-        newGrafo.adicionarVertice(hub);
-        newGrafo.adicionarVertice(zona);
-        
+        await fetchCurrentState()
         // Resetar todos os estados
-        setGrafo(newGrafo);
         setBlocked([]);
         setReport(null);
         setNewRoute({ from: '', to: '', capacity: 0 });
@@ -489,13 +482,9 @@ export default function App() {
       try {
         const response = await fetch(`${API_BASE_URL}/network/current-state`);
         const data = await response.json();
-        
         const g = new Grafo();
-        g.vertices = new Map();
-        g.adjacencia = new Map();
-        
-        // Adiciona vértices mas não rotas
-        data.grafo.vertices.forEach(v => {
+        const verticesMap = new Map();
+        (data.grafo.vertices || []).forEach(v => {
           let vertice;
           switch (v.tipo) {
             case 'storage': vertice = new Deposito(v.id, v.nome); break;
@@ -503,16 +492,22 @@ export default function App() {
             case 'delivery_zone': vertice = new ZonaEntrega(v.id, v.nome); break;
             default: vertice = new Vertice(v.id, v.nome);
           }
-          g.vertices.set(v.id, vertice);
+          verticesMap.set(v.id, vertice);
+          g.adicionarVertice(vertice);
         });
-        
+        (data.grafo.rotas || []).forEach(r => {
+          const origem = verticesMap.get(r.origem);
+          const destino = verticesMap.get(r.destino);
+          if (origem && destino) {
+            g.adicionarRota(new Rota(origem, destino, r.capacidade));
+          }
+        });
         setGrafo(g);
       } catch (err) {
         console.error("Erro ao carregar dados:", err);
         setError("Falha ao carregar dados iniciais");
       }
     };
-    
     loadInitialData();
   }, []);
 
@@ -603,7 +598,7 @@ export default function App() {
             <h4 className="text-md font-semibold mb-2">Adicionar Nova Rota</h4>
             <select
               value={newRoute.from}
-              onChange={(e) => setNewRoute({ ...newRoute, from: e.target.value })}
+              onChange={(e) => setNewRoute({ ...newRoute, from: parseInt(e.target.value, 10) })}
               disabled={loading}
               className="mr-2 p-1 border"
             >
@@ -616,7 +611,7 @@ export default function App() {
             </select>
             <select
               value={newRoute.to}
-              onChange={(e) => setNewRoute({ ...newRoute, to: e.target.value })}
+              onChange={(e) => setNewRoute({ ...newRoute, to: parseInt(e.target.value, 10) })}
               disabled={loading}
               className="mr-2 p-1 border"
             >
@@ -630,7 +625,7 @@ export default function App() {
             <input
               type="number"
               value={newRoute.capacity}
-              onChange={(e) => setNewRoute({ ...newRoute, capacity: parseInt(e.target.value) || 0 })}
+              onChange={(e) => setNewRoute({ ...newRoute, capacity: parseInt(e.target.value, 10) || 0 })}
               placeholder="Capacidade"
               disabled={loading}
               className="mr-2 p-1 border"
@@ -639,25 +634,25 @@ export default function App() {
               Adicionar Rota
             </Button>
           </div>
-          {Array.from(grafo.adjacencia.entries()).flatMap(([_, rotas]) =>
-            rotas.map((rota) => {
-              const key = `${rota.origem.id}-${rota.destino.id}`;
-              return (
-                <div key={key} className="flex justify-between mb-2">
-                  <span>
-                    Bloquear rota {rota.origem.nome} → {rota.destino.nome} (Capacidade: {rota.capacidade})
-                  </span>
-                  <Button
-                    variant="destructive"
-                    onClick={() => toggleBlock(rota.origem.id, rota.destino.id)}
-                    disabled={loading}
-                  >
-                    {blocked.includes(key) ? 'Desbloquear' : 'Bloquear'}
-                  </Button>
-                </div>
-              );
-            })
-          )}
+            {Array.from(grafo.adjacencia.entries()).flatMap(([_, rotas], origemIdx) =>
+              rotas.map((rota, rotaIdx) => {
+                const key = rota.id || `${rota.origem.id}-${rota.destino.id}-${rotaIdx}`;
+                return (
+                  <div key={key} className="flex justify-between mb-2">
+                    <span>
+                      Bloquear rota {rota.origem.nome} → {rota.destino.nome} (Capacidade: {rota.capacidade})
+                    </span>
+                    <Button
+                      variant="destructive"
+                      onClick={() => toggleBlock(rota.origem.id, rota.destino.id)}
+                      disabled={loading}
+                    >
+                      {blocked.includes(`${rota.origem.id}-${rota.destino.id}`) ? 'Desbloquear' : 'Bloquear'}
+                    </Button>
+                  </div>
+                );
+              })
+            )}
           <div className="mt-4">
             <Button onClick={runStressTest} disabled={loading} className="mr-2 mb-2">
               Teste de Stress

@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from collections import deque, defaultdict
 from datetime import datetime
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import Body
 import logging
 from typing import List, Optional
 
@@ -132,6 +133,7 @@ class RouteOperationRequest(BaseModel):
     origem_id: int
     destino_id: int
     capacidade: int
+    uso: int = 0
 
 
 class CurrentStateResponse(BaseModel):
@@ -346,7 +348,7 @@ async def add_route(request: RouteOperationRequest, response: Response):
             origem_id=request.origem_id,
             destino_id=request.destino_id,
             capacidade=request.capacidade,
-            uso=0,
+            uso=request.uso,
             priority=Priority.LOW
         )
         
@@ -432,6 +434,111 @@ def reset_network():
         "arestas": arestas
     }
 
+
+@api.post("/relatorio-automatico")
+def relatorio_automatico(
+    data: dict = Body(default={})
+):
+    blocked = data.get("blocked", [])
+    # Gargalos e capacidade ociosa
+    bottlenecks = [a for a in arestas if a.capacidade > 10 and f"{a.origem_id}-{a.destino_id}" not in blocked]
+    idle_capacity = [a for a in arestas if a.capacidade < 7 and f"{a.origem_id}-{a.destino_id}" not in blocked]
+
+    # Fluxo máximo (usando Edmonds-Karp entre depósitos e zonas de entrega)
+    vertices_storage = [v.vertice_id for v in vertices if v.type in ("storage", "Deposito")]
+    vertices_delivery = [v.vertice_id for v in vertices if v.type in ("delivery_zone", "ZonaEntrega")]
+    if not vertices_storage or not vertices_delivery:
+        max_flow = 0
+        flow_paths = []
+    else:
+        id_to_idx = {v.vertice_id: idx for idx, v in enumerate(vertices)}
+        num_nodes = len(vertices)
+        edges = [
+            (id_to_idx[a.origem_id], id_to_idx[a.destino_id], a.capacidade)
+            for a in arestas if f"{a.origem_id}-{a.destino_id}" not in blocked
+        ]
+        sources = [id_to_idx[i] for i in vertices_storage]
+        sinks = [id_to_idx[i] for i in vertices_delivery]
+
+        # Edmonds-Karp adaptado
+        from collections import deque
+        def ek(n, edges, sources, sinks):
+            super_source = n
+            super_sink = n + 1
+            capacity = [[0] * (n + 2) for _ in range(n + 2)]
+            for u, v, cap in edges:
+                capacity[u][v] += cap
+            for s in sources:
+                capacity[super_source][s] = float('inf')
+            for t in sinks:
+                capacity[t][super_sink] = float('inf')
+            parent = [-1] * (n + 2)
+            max_flow = 0
+            paths = []
+            def bfs():
+                nonlocal parent
+                parent = [-1] * (n + 2)
+                queue = deque([super_source])
+                parent[super_source] = -2
+                flow = [0] * (n + 2)
+                flow[super_source] = float('inf')
+                while queue:
+                    u = queue.popleft()
+                    for v in range(n + 2):
+                        if parent[v] == -1 and capacity[u][v] > 0:
+                            parent[v] = u
+                            flow[v] = min(flow[u], capacity[u][v])
+                            if v == super_sink:
+                                return flow[super_sink]
+                            queue.append(v)
+                return 0
+            path_flow = bfs()
+            while path_flow:
+                max_flow += path_flow
+                # Recupera caminho
+                v = super_sink
+                path = []
+                while v != super_source:
+                    u = parent[v]
+                    path.append((u, v))
+                    v = u
+                path.reverse()
+                real_path = [p for p in path if p[0] != super_source and p[1] != super_sink]
+                if real_path:
+                    paths.append(real_path)
+                # Atualiza capacidades
+                v = super_sink
+                while v != super_source:
+                    u = parent[v]
+                    capacity[u][v] -= path_flow
+                    capacity[v][u] += path_flow
+                    v = u
+                path_flow = bfs()
+            return max_flow, paths
+        max_flow, flow_paths = ek(num_nodes, edges, sources, sinks)
+
+    return {
+        "bottlenecks": [
+            {
+                **a.dict(),
+                "origem": next((v.name for v in vertices if v.vertice_id == a.origem_id), a.origem_id),
+                "destino": next((v.name for v in vertices if v.vertice_id == a.destino_id), a.destino_id),
+            }
+            for a in bottlenecks
+        ],
+        "idle_capacity": [
+            {
+                **a.dict(),
+                "origem": next((v.name for v in vertices if v.vertice_id == a.origem_id), a.origem_id),
+                "destino": next((v.name for v in vertices if v.vertice_id == a.destino_id), a.destino_id),
+            }
+            for a in idle_capacity
+        ],
+        "max_flow": int(max_flow),
+        "flow_paths": flow_paths or [],
+        "timestamp": datetime.now().isoformat()
+    }
+
 def calculate_max_flow(num_nodes, edges, sources, sinks):
     # Implementação similar às funções maxFlow... do React
     super_source = num_nodes
@@ -469,7 +576,10 @@ def get_current_state():
                 {
                     "origem": a.origem_id,
                     "destino": a.destino_id,
-                    "capacidade": a.capacidade
+                    "capacidade": a.capacidade,
+                    "aresta_id": a.aresta_id,      
+                    "uso": a.uso,                  
+                    "priority": a.priority 
                 }
                 for a in arestas
             ]

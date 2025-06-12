@@ -189,7 +189,9 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [report, setReport] = useState(null);
-  const [newRoute, setNewRoute] = useState({ from: '', to: '', capacity: 0 });
+  const [newRoute, setNewRoute] = useState({ from: '', to: '', capacity: 0, uso: 0 });
+  const [editRota, setEditRota] = useState({});
+  const [selectedEditRota, setSelectedEditRota] = useState('');
 
   const toggleBlock = async (from, to) => {
     if (loading) return;
@@ -206,6 +208,50 @@ export default function App() {
       }
     } catch (err) {
       setError('Erro ao atualizar a rota. Tente novamente.');
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEditRota = (aresta_id, field, value) => {
+  setEditRota((prev) => ({
+    ...prev,
+    [aresta_id]: {
+      ...prev[aresta_id],
+      [field]: value,
+    },
+  }));
+};
+
+  const saveEditRota = async (aresta) => {
+    if (!aresta.aresta_id) {
+      setError('Só é possível editar rotas já persistidas no backend.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const edit = editRota[aresta.aresta_id] || {};
+      const payload = {
+        origem_id: aresta.origem.id,
+        destino_id: aresta.destino.id,
+        capacidade: aresta.capacidade,
+        uso: edit.uso !== undefined ? Number(edit.uso) : aresta.uso,
+        priority: edit.priority !== undefined ? Number(edit.priority) : aresta.priority,
+      };
+      await fetch(`${API_BASE_URL}/arestas/${aresta.aresta_id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      setEditRota((prev) => {
+        const copy = { ...prev };
+        delete copy[aresta.aresta_id];
+        return copy;
+      });
+      await fetchCurrentState();
+    } catch (err) {
+      setError('Erro ao editar rota. Tente novamente.');
       console.error(err);
     } finally {
       setLoading(false);
@@ -270,39 +316,22 @@ export default function App() {
   const generateReport = async () => {
     setLoading(true);
     try {
-      const requestData = {
-        vertices: Array.from(grafo.vertices.values()).map(v => ({
-          id: v.id,
-          tipo: v.constructor.name,
-          nome: v.nome
-        })),
-        rotas: Array.from(grafo.adjacencia.values()).flat().map(r => ({
-          origem: r.origem.id,
-          destino: r.destino.id,
-          capacidade: r.capacidade
-        })),
-        blocked_routes: blocked
-      };
-
-      const response = await fetch(`${API_BASE_URL}/network/analyze`, {
+      const response = await fetch(`${API_BASE_URL}/relatorio-automatico`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(requestData)
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blocked }),
       });
       const reportData = await response.json();
-      
       setReport({
         bottlenecks: reportData.bottlenecks,
         idleCapacity: reportData.idle_capacity,
         timestamp: new Date(reportData.timestamp).toLocaleString(),
         maxFlow: reportData.max_flow,
-        flowPaths: reportData.flow_paths
+        flowPaths: reportData.flow_paths,
       });
     } catch (err) {
-      setError('Erro ao gerar relatório. Tente novamente.');
-      console.error(err);
+      setError('Erro ao gerar relatório automático.');
+      setReport(null);
     } finally {
       setLoading(false);
     }
@@ -328,12 +357,20 @@ const fetchCurrentState = async () => {
       g.adicionarVertice(vertice);
     });
 
-    // Adiciona rotas (corrigido para .rotas)
     (data.grafo.rotas || []).forEach(r => {
       const origem = verticesMap.get(r.origem);
       const destino = verticesMap.get(r.destino);
       if (origem && destino) {
-        g.adicionarRota(new Rota(origem, destino, r.capacidade));
+        g.adicionarRota(
+          new Rota(
+            origem,
+            destino,
+            r.capacidade,
+            r.uso !== undefined ? r.uso : 0,
+            r.aresta_id !== undefined ? r.aresta_id : undefined,
+            r.priority !== undefined ? r.priority : 1
+          )
+        );
       }
     });
 
@@ -365,6 +402,7 @@ const fetchCurrentState = async () => {
           origem_id: parseInt(newRoute.from, 10),
           destino_id: parseInt(newRoute.to, 10),
           capacidade: newRoute.capacity,
+          uso: newRoute.uso || 0,
         }),
       });
 
@@ -499,7 +537,16 @@ const fetchCurrentState = async () => {
           const origem = verticesMap.get(r.origem);
           const destino = verticesMap.get(r.destino);
           if (origem && destino) {
-            g.adicionarRota(new Rota(origem, destino, r.capacidade));
+            g.adicionarRota(
+              new Rota(
+                origem,
+                destino,
+                r.capacidade,
+                r.uso !== undefined ? r.uso : 0,
+                r.aresta_id !== undefined ? r.aresta_id : undefined,
+                r.priority !== undefined ? r.priority : 1
+              )
+            );
           }
         });
         setGrafo(g);
@@ -622,6 +669,7 @@ const fetchCurrentState = async () => {
                 </option>
               ))}
             </select>
+            <span className="mr-1">Capacidade:</span>
             <input
               type="number"
               value={newRoute.capacity}
@@ -630,28 +678,129 @@ const fetchCurrentState = async () => {
               disabled={loading}
               className="mr-2 p-1 border"
             />
+
+            <span>Uso:</span>
+            <input
+              type="number"
+              value={newRoute.uso || 0}
+              onChange={(e) => setNewRoute({ ...newRoute, uso: parseInt(e.target.value) || 0 })}
+              placeholder="Uso"
+              disabled={loading}
+              className="p-1 border w-24"
+            />
             <Button onClick={addNewRoute} disabled={loading} className="ml-2">
               Adicionar Rota
             </Button>
           </div>
+          
+          <div className="mb-4">
+            <h4 className="text-md font-semibold mb-2">Editar Rota Existente</h4>
+              <select
+                value={selectedEditRota}
+                onChange={e => setSelectedEditRota(e.target.value)}
+                className="mr-2 p-1 border"
+                disabled={loading}
+              >
+                <option value="">Selecione a Rota</option>
+                {Array.from(grafo.adjacencia.values()).flat().map((rota, idx) => (
+                  <option
+                    key={rota.aresta_id !== undefined ? rota.aresta_id : `${rota.origem.id}-${rota.destino.id}-${idx}`}
+                    value={rota.aresta_id !== undefined ? rota.aresta_id : `${rota.origem.id}-${rota.destino.id}-${idx}`}
+                  >
+                    {typeof rota.origem === 'object'
+  ? rota.origem.nome
+  : grafo.vertices.get(String(rota.origem))?.nome || rota.origem}
+→
+{typeof rota.destino === 'object'
+  ? rota.destino.nome
+  : grafo.vertices.get(String(rota.destino))?.nome || rota.destino}
+                  </option>
+                ))}
+              </select>
+              {selectedEditRota && (() => {
+                const rotasList = Array.from(grafo.adjacencia.values()).flat();
+                const rota = rotasList.find((r, idx) => {
+                  const key = r.aresta_id !== undefined ? String(r.aresta_id) : `${r.origem.id}-${r.destino.id}-${idx}`;
+                  return key === selectedEditRota;
+                });
+              if (!rota) return null;
+              return (
+                <div className="flex items-center mt-2 gap-2">
+                  <span>
+                    {typeof rota.origem === 'object'
+  ? rota.origem.nome
+  : grafo.vertices.get(String(rota.origem))?.nome || rota.origem}
+→
+{typeof rota.destino === 'object'
+  ? rota.destino.nome
+  : grafo.vertices.get(String(rota.destino))?.nome || rota.destino}
+                  </span>
+                  <span>Uso:</span>
+                  <input
+                    type="number"
+                    value={
+                      editRota[selectedEditRota]?.uso !== undefined
+                        ? editRota[selectedEditRota].uso
+                        : rota.uso || 0
+                    }
+                    min={0}
+                    onChange={(e) => handleEditRota(selectedEditRota, 'uso', e.target.value)}
+                    className="p-1 border w-16"
+                    disabled={loading}
+                  />
+                  <span>Prioridade:</span>
+                  <input
+                    type="number"
+                    value={
+                      editRota[selectedEditRota]?.priority !== undefined
+                        ? editRota[selectedEditRota].priority
+                        : rota.priority || 1
+                    }
+                    min={1}
+                    max={5}
+                    onChange={(e) => handleEditRota(selectedEditRota, 'priority', e.target.value)}
+                    className="p-1 border w-16"
+                    disabled={loading}
+                  />
+                  <Button
+                    onClick={() => saveEditRota(rota)}
+                    disabled={loading}
+                    className="ml-2"
+                  >
+                    Salvar
+                  </Button>
+                </div>
+              );
+            })()}
+          </div>
+
+
             {Array.from(grafo.adjacencia.entries()).flatMap(([_, rotas], origemIdx) =>
-              rotas.map((rota, rotaIdx) => {
-                const key = rota.id || `${rota.origem.id}-${rota.destino.id}-${rotaIdx}`;
-                return (
-                  <div key={key} className="flex justify-between mb-2">
-                    <span>
-                      Bloquear rota {rota.origem.nome} → {rota.destino.nome} (Capacidade: {rota.capacidade})
-                    </span>
-                    <Button
-                      variant="destructive"
-                      onClick={() => toggleBlock(rota.origem.id, rota.destino.id)}
-                      disabled={loading}
-                    >
-                      {blocked.includes(`${rota.origem.id}-${rota.destino.id}`) ? 'Desbloquear' : 'Bloquear'}
-                    </Button>
-                  </div>
-                );
-              })
+              rotas.map((rota, rotaIdx) => (
+                <div key={rota.aresta_id || `${rota.origem.id}-${rota.destino.id}-${rotaIdx}`} className="flex items-center gap-2 mb-1">
+                  <span>
+                    {typeof rota.origem === 'object'
+                      ? rota.origem.nome
+                      : grafo.vertices.get(String(rota.origem))?.nome || rota.origem}
+                    {' → '}
+                    {typeof rota.destino === 'object'
+                      ? rota.destino.nome
+                      : grafo.vertices.get(String(rota.destino))?.nome || rota.destino}
+                    {' | '}
+                    <strong>Capacidade:</strong> {rota.capacidade}
+                    {' | '}
+                    <strong>Uso:</strong> {rota.uso ?? 0}
+                  </span>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => toggleBlock(rota.origem.id ?? rota.origem, rota.destino.id ?? rota.destino)}
+                    disabled={loading}
+                  >
+                    {blocked.includes(`${rota.origem.id ?? rota.origem}-${rota.destino.id ?? rota.destino}`) ? 'Desbloquear' : 'Bloquear'}
+                  </Button>
+                </div>
+              ))
             )}
           <div className="mt-4">
             <Button onClick={runStressTest} disabled={loading} className="mr-2 mb-2">
@@ -673,23 +822,35 @@ const fetchCurrentState = async () => {
                 <strong>Gargalos (Capacidade > 10):</strong>
               </p>
               <ul>
-                {report.bottlenecks.map((rota, idx) => (
+                {(report.bottlenecks || []).map((rota, idx) => (
                   <li key={idx}>
-                    {rota.origem.nome} → {rota.destino.nome}: Capacidade {rota.capacidade}
+                    {typeof rota.origem === 'object'
+  ? rota.origem.nome
+  : grafo.vertices.get(String(rota.origem))?.nome || rota.origem}
+→
+{typeof rota.destino === 'object'
+  ? rota.destino.nome
+  : grafo.vertices.get(String(rota.destino))?.nome || rota.destino}
                   </li>
                 ))}
-                {report.bottlenecks.length === 0 && <li>Nenhum gargalo detectado.</li>}
+                {(report.bottlenecks || []).length === 0 && <li>Nenhum gargalo detectado.</li>}
               </ul>
               <p>
                 <strong>Capacidade Ociosa (Capacidade &lt; 7):</strong>
               </p>
               <ul>
-                {report.idleCapacity.map((rota, idx) => (
+                {(report.idleCapacity || []).map((rota, idx) => (
                   <li key={idx}>
-                    {rota.origem.nome} → {rota.destino.nome}: Capacidade {rota.capacidade}
+                    {typeof rota.origem === 'object'
+  ? rota.origem.nome
+  : grafo.vertices.get(String(rota.origem))?.nome || rota.origem}
+→
+{typeof rota.destino === 'object'
+  ? rota.destino.nome
+  : grafo.vertices.get(String(rota.destino))?.nome || rota.destino}
                   </li>
                 ))}
-                {report.idleCapacity.length === 0 && <li>Nenhuma capacidade ociosa detectada.</li>}
+                {(report.idleCapacity || []).length === 0 && <li>Nenhuma capacidade ociosa detectada.</li>}
               </ul>
               <p>
                 <strong>Fluxo Máximo Total:</strong> {report.maxFlow}
@@ -698,7 +859,7 @@ const fetchCurrentState = async () => {
                 <strong>Caminhos de Fluxo:</strong>
               </p>
               <ul>
-                {report.flowPaths.map((path, idx) => (
+                {(report.flowPaths || []).map((path, idx) => (
                   <li key={idx}>
                     Caminho {idx + 1}: {path.map(([u, v]) => {
                       const nodeU = Array.from(grafo.vertices.values())[u];
